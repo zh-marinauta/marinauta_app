@@ -37,7 +37,7 @@ class _ColetaScreenState extends State<ColetaScreen> {
   final TextEditingController _comunidadeController = TextEditingController();
 
   String? unidadeProdutivaSelecionada;
-  String? unidadeProdutivaId; // id do doc selecionado (se houver)
+  String? unidadeProdutivaId;
   String origemProducao = "Própria";
 
   List<Map<String, dynamic>> especiesRegistradas = [];
@@ -52,14 +52,10 @@ class _ColetaScreenState extends State<ColetaScreen> {
     _localController.text = widget.entreposto;
   }
 
-  // ========================= AUTOCOMPLETE =========================
+  // 🔹 Busca unidades produtivas existentes
   Future<void> _buscarUnidadesProdutivas(String termo) async {
     if (termo.length < 3) return;
-    final query = await _firestore
-        .collection('unidades_produtivas')
-        .where('ativo', isEqualTo: true)
-        .get();
-
+    final query = await _firestore.collection('unidades_produtivas').get();
     final resultados = query.docs
         .where(
           (d) => d['unidade_produtiva'].toString().toLowerCase().contains(
@@ -89,38 +85,32 @@ class _ColetaScreenState extends State<ColetaScreen> {
     });
   }
 
-  // ========================= VERSÃO & BRANCHING =========================
-  /// Salva um snapshot da versão anterior na subcoleção `versoes` do doc.
+  // 🔹 Snapshot da versão anterior (como antes)
   Future<void> _snapshotVersaoAnterior(
     String docId,
-    Map<String, dynamic> dadosAtuais,
+    Map<String, dynamic> dados,
   ) async {
-    final versaoAtual = (dadosAtuais['versao'] ?? 1) as int;
+    final versaoAtual = (dados['versao'] ?? 1) as int;
     await _firestore
         .collection('unidades_produtivas')
         .doc(docId)
         .collection('versoes')
         .add({
           'versao': versaoAtual,
-          'dados': dadosAtuais,
+          'dados': dados,
           'salvo_em': DateTime.now().toIso8601String(),
         });
   }
 
-  /// Decide entre atualizar (campos vazios) ou criar NOVO doc (mudança de campos preenchidos).
-  ///
-  /// - Atualização: snapshot da versão anterior + incrementa `versao` + preenche apenas vazios.
-  /// - Nova criação: cria doc com `versao: 1` **sem** `baseado_em`.
+  // 🔹 Atualização branda de unidades produtivas (mantém versão branda)
   Future<void> _verificarOuAtualizarUnidadeProdutiva() async {
     final nome = _pescadorController.text.trim();
     final barco = _embarcacaoController.text.trim();
     final tipo = _tipoEmbarcacaoController.text.trim();
     final categoria = _categoriaEmbarcacaoController.text.trim();
     final comunidade = _comunidadeController.text.trim();
-
     final upConcat = "$nome - $barco - $comunidade - $tipo - $categoria";
 
-    // Se não há uma unidade selecionada antes, cria uma do zero
     if (unidadeProdutivaId == null) {
       final created = await _firestore.collection('unidades_produtivas').add({
         'unidade_produtiva': upConcat,
@@ -140,56 +130,31 @@ class _ColetaScreenState extends State<ColetaScreen> {
       return;
     }
 
-    // Há unidade selecionada: carregar dados atuais
     final docRef = _firestore
         .collection('unidades_produtivas')
         .doc(unidadeProdutivaId);
     final doc = await docRef.get();
-    if (!doc.exists) {
-      // Se por algum motivo o doc não existe mais, cria novo "do zero"
-      final created = await _firestore.collection('unidades_produtivas').add({
-        'unidade_produtiva': upConcat,
-        'pescador': nome,
-        'embarcacao': barco,
-        'tipo_embarcacao': tipo,
-        'categoria_embarcacao': categoria,
-        'comunidade': comunidade,
-        'municipio': widget.municipio,
-        'entrepostos': [widget.entreposto],
-        'ativo': true,
-        'versao': 1,
-        'criado_em': DateTime.now().toIso8601String(),
-      });
-      unidadeProdutivaId = created.id;
-      unidadeProdutivaSelecionada = upConcat;
-      return;
-    }
+    if (!doc.exists) return;
 
     final dados = doc.data()!;
+    final atualNome = (dados['pescador'] ?? '').toString();
+    final atualBarco = (dados['embarcacao'] ?? '').toString();
     final atualTipo = (dados['tipo_embarcacao'] ?? '').toString();
     final atualCat = (dados['categoria_embarcacao'] ?? '').toString();
     final atualCom = (dados['comunidade'] ?? '').toString();
-    final atualNome = (dados['pescador'] ?? '').toString();
-    final atualBarco = (dados['embarcacao'] ?? '').toString();
 
-    // Regras:
-    // - Se algum campo estava vazio e foi preenchido agora → ATUALIZA (com snapshot e versao++)
-    // - Se houve mudança de campo que JÁ estava preenchido (pescador/embarcacao/tipo/cat/comunidade) → CRIA NOVO doc (versao:1, sem baseado_em)
-    bool willUpdate = false; // preencher vazios
-    bool willCreateNew = false; // alterou algo que já tinha valor
+    bool willUpdate = false;
+    bool willCreateNew = false;
 
-    // Campos considerados "chave"
     final changedCore =
         (atualNome.isNotEmpty && atualNome != nome) ||
         (atualBarco.isNotEmpty && atualBarco != barco) ||
         (atualTipo.isNotEmpty && atualTipo != tipo);
 
-    // Campos complementares (mudança também cria nova)
     final changedCompl =
         (atualCat.isNotEmpty && atualCat != categoria) ||
         (atualCom.isNotEmpty && atualCom != comunidade);
 
-    // Vazios preenchidos (atualiza)
     final filledEmpty =
         (atualTipo.isEmpty && tipo.isNotEmpty) ||
         (atualCat.isEmpty && categoria.isNotEmpty) ||
@@ -202,8 +167,7 @@ class _ColetaScreenState extends State<ColetaScreen> {
     }
 
     if (willCreateNew) {
-      // ==== NOVO DOC, sem baseado_em, versao 1 ====
-      final created = await _firestore.collection('unidades_produtivas').add({
+      await _firestore.collection('unidades_produtivas').add({
         'unidade_produtiva': upConcat,
         'pescador': nome,
         'embarcacao': barco,
@@ -216,14 +180,9 @@ class _ColetaScreenState extends State<ColetaScreen> {
         'versao': 1,
         'criado_em': DateTime.now().toIso8601String(),
       });
-      unidadeProdutivaId = created.id;
-      unidadeProdutivaSelecionada = upConcat;
     } else if (willUpdate) {
-      // ==== ATUALIZA SOMENTE VAZIOS + SNAPSHOT + versao++ ====
-      await _snapshotVersaoAnterior(doc.id, dados); // guarda versão anterior
-
+      await _snapshotVersaoAnterior(doc.id, dados);
       final versaoNova = (dados['versao'] ?? 1) + 1;
-
       await docRef.update({
         'tipo_embarcacao': atualTipo.isEmpty ? tipo : atualTipo,
         'categoria_embarcacao': atualCat.isEmpty ? categoria : atualCat,
@@ -231,23 +190,12 @@ class _ColetaScreenState extends State<ColetaScreen> {
         'versao': versaoNova,
         'atualizado_em': DateTime.now().toIso8601String(),
       });
-
-      // Regerar o nome concatenado (pode ter mudado por campos que estavam vazios)
-      final novoConcat =
-          "${dados['pescador'] ?? nome} - ${dados['embarcacao'] ?? barco} - "
-          "${(atualCom.isEmpty ? comunidade : atualCom)} - "
-          "${(atualTipo.isEmpty ? tipo : atualTipo)} - "
-          "${(atualCat.isEmpty ? categoria : atualCat)}";
-
-      await docRef.update({'unidade_produtiva': novoConcat});
-      unidadeProdutivaSelecionada = novoConcat;
-    } else {
-      // Nada a mudar, só garantir o concatenado atual
-      unidadeProdutivaSelecionada = upConcat;
     }
+
+    unidadeProdutivaSelecionada = upConcat;
   }
 
-  // ========================= SALVAR DESEMBARQUE =========================
+  // 🔹 Salvar desembarque
   Future<void> _salvarDesembarque() async {
     if (especiesRegistradas.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -286,7 +234,7 @@ class _ColetaScreenState extends State<ColetaScreen> {
     if (context.mounted) Navigator.pushReplacementNamed(context, '/dashboard');
   }
 
-  // ========================= UI =========================
+  // 🔹 Interface
   @override
   Widget build(BuildContext context) {
     const azul = Color(0xFF00294D);
@@ -301,7 +249,6 @@ class _ColetaScreenState extends State<ColetaScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Busca
             Text(
               'Buscar Unidade Produtiva',
               style: TextStyle(color: azul, fontWeight: FontWeight.bold),
@@ -344,9 +291,9 @@ class _ColetaScreenState extends State<ColetaScreen> {
                       .toList(),
                 ),
               ),
+
             const SizedBox(height: 16),
 
-            // Unidade produtiva
             Text(
               'Dados da Unidade Produtiva',
               style: TextStyle(color: azul, fontWeight: FontWeight.bold),
@@ -393,12 +340,10 @@ class _ColetaScreenState extends State<ColetaScreen> {
 
             const Divider(height: 24, color: Colors.black26),
 
-            // Espécies
             ...especiesRegistradas.asMap().entries.map((entry) {
               final i = entry.key;
               final e = entry.value;
               return Card(
-                margin: const EdgeInsets.symmetric(vertical: 4),
                 child: ListTile(
                   title: Text(
                     '${e['especie']} - ${e['quantidade']} ${e['unidade']}',
@@ -461,84 +406,229 @@ class _ColetaScreenState extends State<ColetaScreen> {
     );
   }
 
+  /// ======================================
+  // FUNÇÕES DE AUTOCOMPLETE E AUTOCRIAÇÃO
+  // ======================================
+  Future<List<String>> _buscarSugestoes(String colecao, String termo) async {
+    if (termo.length < 2) return [];
+    final snap = await _firestore.collection(colecao).get();
+    return snap.docs
+        .map((d) => d['nome'].toString())
+        .where((n) => n.toLowerCase().contains(termo.toLowerCase()))
+        .toList();
+  }
+
+  /// Garante que o item existe na coleção, criando se não existir.
+  Future<void> _garantirRegistroColecao(String colecao, String nome) async {
+    if (nome.trim().isEmpty) return;
+    final query = await _firestore
+        .collection(colecao)
+        .where('nome', isEqualTo: nome.trim())
+        .limit(1)
+        .get();
+
+    if (query.docs.isEmpty) {
+      await _firestore.collection(colecao).add({
+        'nome': nome.trim(),
+        'ativo': true,
+        'criado_em': DateTime.now().toIso8601String(),
+      });
+    }
+  }
+
+  // ======================================
+  // DIALOGO PARA ADICIONAR ESPÉCIE
+  // ======================================
   Future<void> _mostrarDialogoAdicionarEspecie(BuildContext context) async {
-    final TextEditingController especieCtrl = TextEditingController();
-    final TextEditingController qtdCtrl = TextEditingController();
-    final TextEditingController precoCtrl = TextEditingController();
-    final TextEditingController arteCtrl = TextEditingController();
-    final TextEditingController pesqueiroCtrl = TextEditingController();
+    const azul = Color(0xFF00294D);
+    final especieCtrl = TextEditingController();
+    final qtdCtrl = TextEditingController();
+    final precoCtrl = TextEditingController();
+    final arteCtrl = TextEditingController();
+    final pesqueiroCtrl = TextEditingController();
     String unidade = 'Kg';
+
+    List<String> sugestoesEspecie = [];
+    List<String> sugestoesArte = [];
+    List<String> sugestoesPesqueiro = [];
 
     await showDialog(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Adicionar Espécie'),
-        content: SingleChildScrollView(
-          child: Column(
-            children: [
-              _buildTextField('Espécie', especieCtrl, const Color(0xFF00294D)),
-              const SizedBox(height: 8),
-              _buildTextField('Quantidade', qtdCtrl, const Color(0xFF00294D)),
-              const SizedBox(height: 8),
-              DropdownButtonFormField<String>(
-                value: unidade,
-                items: ['Kg', 'Dúzia', 'Caixa']
-                    .map((u) => DropdownMenuItem(value: u, child: Text(u)))
-                    .toList(),
-                onChanged: (v) => unidade = v!,
-                decoration: const InputDecoration(
-                  labelText: 'Unidade de medida',
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setStateDialog) {
+          return AlertDialog(
+            title: const Text('Adicionar Espécie'),
+            content: SingleChildScrollView(
+              child: Column(
+                children: [
+                  // Campo de Espécie com autocomplete
+                  TextField(
+                    controller: especieCtrl,
+                    style: const TextStyle(color: azul),
+                    decoration: const InputDecoration(
+                      labelText: 'Espécie',
+                      border: OutlineInputBorder(),
+                    ),
+                    onChanged: (v) async {
+                      final results = await _buscarSugestoes('especies', v);
+                      setStateDialog(() => sugestoesEspecie = results);
+                    },
+                  ),
+                  if (sugestoesEspecie.isNotEmpty)
+                    Container(
+                      decoration: BoxDecoration(
+                        border: Border.all(color: azul),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Column(
+                        children: sugestoesEspecie
+                            .map(
+                              (s) => ListTile(
+                                title: Text(s),
+                                onTap: () {
+                                  especieCtrl.text = s;
+                                  setStateDialog(
+                                    () => sugestoesEspecie.clear(),
+                                  );
+                                },
+                              ),
+                            )
+                            .toList(),
+                      ),
+                    ),
+                  const SizedBox(height: 8),
+
+                  // Quantidade
+                  _buildTextField('Quantidade', qtdCtrl, azul),
+                  const SizedBox(height: 8),
+
+                  // Unidade
+                  DropdownButtonFormField<String>(
+                    value: unidade,
+                    items: ['Kg', 'Dúzia', 'Caixa']
+                        .map((u) => DropdownMenuItem(value: u, child: Text(u)))
+                        .toList(),
+                    onChanged: (v) => unidade = v!,
+                    decoration: const InputDecoration(
+                      labelText: 'Unidade de medida',
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+
+                  // Preço
+                  _buildTextField('Preço por unidade (R\$)', precoCtrl, azul),
+                  const SizedBox(height: 8),
+
+                  // Arte de pesca com autocomplete
+                  TextField(
+                    controller: arteCtrl,
+                    style: const TextStyle(color: azul),
+                    decoration: const InputDecoration(
+                      labelText: 'Arte de pesca',
+                      border: OutlineInputBorder(),
+                    ),
+                    onChanged: (v) async {
+                      final results = await _buscarSugestoes('artes_pesca', v);
+                      setStateDialog(() => sugestoesArte = results);
+                    },
+                  ),
+                  if (sugestoesArte.isNotEmpty)
+                    Container(
+                      decoration: BoxDecoration(
+                        border: Border.all(color: azul),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Column(
+                        children: sugestoesArte
+                            .map(
+                              (s) => ListTile(
+                                title: Text(s),
+                                onTap: () {
+                                  arteCtrl.text = s;
+                                  setStateDialog(() => sugestoesArte.clear());
+                                },
+                              ),
+                            )
+                            .toList(),
+                      ),
+                    ),
+                  const SizedBox(height: 8),
+
+                  // Pesqueiro com autocomplete
+                  TextField(
+                    controller: pesqueiroCtrl,
+                    style: const TextStyle(color: azul),
+                    decoration: const InputDecoration(
+                      labelText: 'Pesqueiro',
+                      border: OutlineInputBorder(),
+                    ),
+                    onChanged: (v) async {
+                      final results = await _buscarSugestoes('pesqueiros', v);
+                      setStateDialog(() => sugestoesPesqueiro = results);
+                    },
+                  ),
+                  if (sugestoesPesqueiro.isNotEmpty)
+                    Container(
+                      decoration: BoxDecoration(
+                        border: Border.all(color: azul),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Column(
+                        children: sugestoesPesqueiro
+                            .map(
+                              (s) => ListTile(
+                                title: Text(s),
+                                onTap: () {
+                                  pesqueiroCtrl.text = s;
+                                  setStateDialog(
+                                    () => sugestoesPesqueiro.clear(),
+                                  );
+                                },
+                              ),
+                            )
+                            .toList(),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('Cancelar'),
+              ),
+              ElevatedButton(
+                style: ElevatedButton.styleFrom(backgroundColor: azul),
+                onPressed: () async {
+                  // 🔹 Autoalimentar coleções
+                  await _garantirRegistroColecao('especies', especieCtrl.text);
+                  await _garantirRegistroColecao('artes_pesca', arteCtrl.text);
+                  await _garantirRegistroColecao(
+                    'pesqueiros',
+                    pesqueiroCtrl.text,
+                  );
+
+                  // 🔹 Adicionar à lista local
+                  setState(() {
+                    especiesRegistradas.add({
+                      'especie': especieCtrl.text.trim(),
+                      'quantidade': double.tryParse(qtdCtrl.text) ?? 0,
+                      'unidade': unidade,
+                      'preco_unidade': double.tryParse(precoCtrl.text) ?? 0,
+                      'arte_pesca': arteCtrl.text.trim(),
+                      'pesqueiro': pesqueiroCtrl.text.trim(),
+                    });
+                  });
+                  Navigator.pop(ctx);
+                },
+                child: const Text(
+                  'Adicionar',
+                  style: TextStyle(color: Colors.white),
                 ),
               ),
-              const SizedBox(height: 8),
-              _buildTextField(
-                'Preço por unidade (R\$)',
-                precoCtrl,
-                const Color(0xFF00294D),
-              ),
-              const SizedBox(height: 8),
-              _buildTextField(
-                'Arte de pesca',
-                arteCtrl,
-                const Color(0xFF00294D),
-              ),
-              const SizedBox(height: 8),
-              _buildTextField(
-                'Pesqueiro',
-                pesqueiroCtrl,
-                const Color(0xFF00294D),
-              ),
             ],
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('Cancelar'),
-          ),
-          ElevatedButton(
-            onPressed: () {
-              setState(() {
-                especiesRegistradas.add({
-                  'especie': especieCtrl.text,
-                  'quantidade': double.tryParse(qtdCtrl.text) ?? 0,
-                  'unidade': unidade,
-                  'preco_unidade': double.tryParse(precoCtrl.text) ?? 0,
-                  'arte_pesca': arteCtrl.text,
-                  'pesqueiro': pesqueiroCtrl.text,
-                });
-              });
-              Navigator.pop(ctx);
-            },
-            style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFF00294D),
-            ),
-            child: const Text(
-              'Adicionar',
-              style: TextStyle(color: Colors.white),
-            ),
-          ),
-        ],
+          );
+        },
       ),
     );
   }
