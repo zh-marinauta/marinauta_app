@@ -436,9 +436,6 @@ class _ColetaScreenState extends State<ColetaScreen> {
     }
   }
 
-  // ======================================
-  // DIALOGO PARA ADICIONAR ESPÉCIE
-  // ======================================
   Future<void> _mostrarDialogoAdicionarEspecie(BuildContext context) async {
     const azul = Color(0xFF00294D);
     final especieCtrl = TextEditingController();
@@ -461,7 +458,7 @@ class _ColetaScreenState extends State<ColetaScreen> {
             content: SingleChildScrollView(
               child: Column(
                 children: [
-                  // Campo de Espécie com autocomplete
+                  // Campo de Espécie
                   TextField(
                     controller: especieCtrl,
                     style: const TextStyle(color: azul),
@@ -476,6 +473,7 @@ class _ColetaScreenState extends State<ColetaScreen> {
                   ),
                   if (sugestoesEspecie.isNotEmpty)
                     Container(
+                      margin: const EdgeInsets.only(top: 4),
                       decoration: BoxDecoration(
                         border: Border.all(color: azul),
                         borderRadius: BorderRadius.circular(8),
@@ -511,6 +509,7 @@ class _ColetaScreenState extends State<ColetaScreen> {
                     onChanged: (v) => unidade = v!,
                     decoration: const InputDecoration(
                       labelText: 'Unidade de medida',
+                      border: OutlineInputBorder(),
                     ),
                   ),
                   const SizedBox(height: 8),
@@ -519,7 +518,7 @@ class _ColetaScreenState extends State<ColetaScreen> {
                   _buildTextField('Preço por unidade (R\$)', precoCtrl, azul),
                   const SizedBox(height: 8),
 
-                  // Arte de pesca com autocomplete
+                  // Arte de pesca
                   TextField(
                     controller: arteCtrl,
                     style: const TextStyle(color: azul),
@@ -534,6 +533,7 @@ class _ColetaScreenState extends State<ColetaScreen> {
                   ),
                   if (sugestoesArte.isNotEmpty)
                     Container(
+                      margin: const EdgeInsets.only(top: 4),
                       decoration: BoxDecoration(
                         border: Border.all(color: azul),
                         borderRadius: BorderRadius.circular(8),
@@ -554,7 +554,7 @@ class _ColetaScreenState extends State<ColetaScreen> {
                     ),
                   const SizedBox(height: 8),
 
-                  // Pesqueiro com autocomplete
+                  // Pesqueiro
                   TextField(
                     controller: pesqueiroCtrl,
                     style: const TextStyle(color: azul),
@@ -569,6 +569,7 @@ class _ColetaScreenState extends State<ColetaScreen> {
                   ),
                   if (sugestoesPesqueiro.isNotEmpty)
                     Container(
+                      margin: const EdgeInsets.only(top: 4),
                       decoration: BoxDecoration(
                         border: Border.all(color: azul),
                         borderRadius: BorderRadius.circular(8),
@@ -600,7 +601,6 @@ class _ColetaScreenState extends State<ColetaScreen> {
               ElevatedButton(
                 style: ElevatedButton.styleFrom(backgroundColor: azul),
                 onPressed: () async {
-                  // 🔹 Autoalimentar coleções
                   await _garantirRegistroColecao('especies', especieCtrl.text);
                   await _garantirRegistroColecao('artes_pesca', arteCtrl.text);
                   await _garantirRegistroColecao(
@@ -608,7 +608,6 @@ class _ColetaScreenState extends State<ColetaScreen> {
                     pesqueiroCtrl.text,
                   );
 
-                  // 🔹 Adicionar à lista local
                   setState(() {
                     especiesRegistradas.add({
                       'especie': especieCtrl.text.trim(),
