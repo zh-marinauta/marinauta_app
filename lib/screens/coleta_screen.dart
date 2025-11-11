@@ -187,6 +187,7 @@ class _ColetaScreenState extends State<ColetaScreen> {
         'tipo_embarcacao': atualTipo.isEmpty ? tipo : atualTipo,
         'categoria_embarcacao': atualCat.isEmpty ? categoria : atualCat,
         'comunidade': atualCom.isEmpty ? comunidade : atualCom,
+        'unidade_produtiva': upConcat,
         'versao': versaoNova,
         'atualizado_em': DateTime.now().toIso8601String(),
       });
@@ -317,27 +318,6 @@ class _ColetaScreenState extends State<ColetaScreen> {
             const SizedBox(height: 8),
             _buildTextField('Comunidade', _comunidadeController, azul),
 
-            const SizedBox(height: 16),
-            DropdownButtonFormField<String>(
-              value: origemProducao,
-              items: [
-                'Própria',
-                'De terceiros',
-                'Ambas',
-              ].map((o) => DropdownMenuItem(value: o, child: Text(o))).toList(),
-              decoration: InputDecoration(
-                labelText: 'Origem da produção',
-                labelStyle: TextStyle(color: azul),
-                enabledBorder: OutlineInputBorder(
-                  borderSide: BorderSide(color: azul),
-                ),
-                focusedBorder: OutlineInputBorder(
-                  borderSide: BorderSide(color: azul),
-                ),
-              ),
-              onChanged: (v) => setState(() => origemProducao = v!),
-            ),
-
             const Divider(height: 24, color: Colors.black26),
 
             ...especiesRegistradas.asMap().entries.map((entry) {
@@ -367,7 +347,26 @@ class _ColetaScreenState extends State<ColetaScreen> {
               icon: const Icon(Icons.add),
               label: const Text('Adicionar Espécie'),
             ),
-
+            const SizedBox(height: 16),
+            DropdownButtonFormField<String>(
+              value: origemProducao,
+              items: [
+                'Própria',
+                'De terceiros',
+                'Ambas',
+              ].map((o) => DropdownMenuItem(value: o, child: Text(o))).toList(),
+              decoration: InputDecoration(
+                labelText: 'Origem da produção',
+                labelStyle: TextStyle(color: azul),
+                enabledBorder: OutlineInputBorder(
+                  borderSide: BorderSide(color: azul),
+                ),
+                focusedBorder: OutlineInputBorder(
+                  borderSide: BorderSide(color: azul),
+                ),
+              ),
+              onChanged: (v) => setState(() => origemProducao = v!),
+            ),
             const SizedBox(height: 24),
             Center(
               child: ElevatedButton(
@@ -436,6 +435,9 @@ class _ColetaScreenState extends State<ColetaScreen> {
     }
   }
 
+  // ======================================
+  // DIALOGO PARA ADICIONAR ESPÉCIE
+  // ======================================
   Future<void> _mostrarDialogoAdicionarEspecie(BuildContext context) async {
     const azul = Color(0xFF00294D);
     final especieCtrl = TextEditingController();
@@ -458,7 +460,7 @@ class _ColetaScreenState extends State<ColetaScreen> {
             content: SingleChildScrollView(
               child: Column(
                 children: [
-                  // Campo de Espécie
+                  // Campo de Espécie com autocomplete
                   TextField(
                     controller: especieCtrl,
                     style: const TextStyle(color: azul),
@@ -473,7 +475,6 @@ class _ColetaScreenState extends State<ColetaScreen> {
                   ),
                   if (sugestoesEspecie.isNotEmpty)
                     Container(
-                      margin: const EdgeInsets.only(top: 4),
                       decoration: BoxDecoration(
                         border: Border.all(color: azul),
                         borderRadius: BorderRadius.circular(8),
@@ -509,7 +510,6 @@ class _ColetaScreenState extends State<ColetaScreen> {
                     onChanged: (v) => unidade = v!,
                     decoration: const InputDecoration(
                       labelText: 'Unidade de medida',
-                      border: OutlineInputBorder(),
                     ),
                   ),
                   const SizedBox(height: 8),
@@ -518,7 +518,7 @@ class _ColetaScreenState extends State<ColetaScreen> {
                   _buildTextField('Preço por unidade (R\$)', precoCtrl, azul),
                   const SizedBox(height: 8),
 
-                  // Arte de pesca
+                  // Arte de pesca com autocomplete
                   TextField(
                     controller: arteCtrl,
                     style: const TextStyle(color: azul),
@@ -533,7 +533,6 @@ class _ColetaScreenState extends State<ColetaScreen> {
                   ),
                   if (sugestoesArte.isNotEmpty)
                     Container(
-                      margin: const EdgeInsets.only(top: 4),
                       decoration: BoxDecoration(
                         border: Border.all(color: azul),
                         borderRadius: BorderRadius.circular(8),
@@ -554,7 +553,7 @@ class _ColetaScreenState extends State<ColetaScreen> {
                     ),
                   const SizedBox(height: 8),
 
-                  // Pesqueiro
+                  // Pesqueiro com autocomplete
                   TextField(
                     controller: pesqueiroCtrl,
                     style: const TextStyle(color: azul),
@@ -569,7 +568,6 @@ class _ColetaScreenState extends State<ColetaScreen> {
                   ),
                   if (sugestoesPesqueiro.isNotEmpty)
                     Container(
-                      margin: const EdgeInsets.only(top: 4),
                       decoration: BoxDecoration(
                         border: Border.all(color: azul),
                         borderRadius: BorderRadius.circular(8),
@@ -601,6 +599,7 @@ class _ColetaScreenState extends State<ColetaScreen> {
               ElevatedButton(
                 style: ElevatedButton.styleFrom(backgroundColor: azul),
                 onPressed: () async {
+                  // 🔹 Autoalimentar coleções
                   await _garantirRegistroColecao('especies', especieCtrl.text);
                   await _garantirRegistroColecao('artes_pesca', arteCtrl.text);
                   await _garantirRegistroColecao(
@@ -608,6 +607,7 @@ class _ColetaScreenState extends State<ColetaScreen> {
                     pesqueiroCtrl.text,
                   );
 
+                  // 🔹 Adicionar à lista local
                   setState(() {
                     especiesRegistradas.add({
                       'especie': especieCtrl.text.trim(),
