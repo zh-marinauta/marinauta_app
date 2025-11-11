@@ -1,4 +1,6 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:intl/intl.dart';
 
@@ -36,12 +38,17 @@ class _ColetaScreenState extends State<ColetaScreen> {
       TextEditingController();
   final TextEditingController _comunidadeController = TextEditingController();
 
+  // Estado
   String? unidadeProdutivaSelecionada;
   String? unidadeProdutivaId;
   String origemProducao = "Própria";
+  bool _salvando = false;
 
   List<Map<String, dynamic>> especiesRegistradas = [];
   List<Map<String, dynamic>> sugestoesUnidades = [];
+
+  // Debounce para busca
+  Timer? _debounce;
 
   @override
   void initState() {
@@ -52,22 +59,56 @@ class _ColetaScreenState extends State<ColetaScreen> {
     _localController.text = widget.entreposto;
   }
 
-  // 🔹 Busca unidades produtivas existentes
-  Future<void> _buscarUnidadesProdutivas(String termo) async {
-    if (termo.length < 3) return;
-    final query = await _firestore.collection('unidades_produtivas').get();
-    final resultados = query.docs
-        .where(
-          (d) => d['unidade_produtiva'].toString().toLowerCase().contains(
-            termo.toLowerCase(),
-          ),
-        )
-        .map((d) => {'id': d.id, ...d.data()})
-        .toList();
+  // ========= Helpers =========
 
-    setState(() {
-      sugestoesUnidades = resultados.cast<Map<String, dynamic>>();
-    });
+  String _buildUP({
+    required String nome,
+    required String barco,
+    required String tipo,
+    required String categoria,
+    required String comunidade,
+  }) => "$nome - $barco - $tipo - $categoria - $comunidade";
+
+  double _toDouble(String v) {
+    final s = v.replaceAll('.', '').replaceAll(',', '.');
+    return double.tryParse(s) ?? 0.0;
+  }
+
+  void _showErrorSnack(String msg) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+  }
+
+  // ========= Busca UP (indexada) =========
+  Future<void> _buscarUnidadesProdutivas(String termo) async {
+    if (termo.length < 3) {
+      setState(() => sugestoesUnidades = []);
+      return;
+    }
+    final termoLower = termo.toLowerCase();
+    try {
+      final query = await _firestore
+          .collection('unidades_produtivas')
+          .where('unidade_produtiva_busca', isGreaterThanOrEqualTo: termoLower)
+          .where(
+            'unidade_produtiva_busca',
+            isLessThan:
+                '$termoLower'
+                'z',
+          )
+          .limit(20)
+          .get();
+
+      final resultados = query.docs
+          .map((d) => {'id': d.id, ...d.data()})
+          .cast<Map<String, dynamic>>()
+          .toList();
+
+      setState(() => sugestoesUnidades = resultados);
+    } catch (e) {
+      debugPrint('Erro na busca de UP: $e');
+      _showErrorSnack('Falha ao buscar unidades produtivas.');
+    }
   }
 
   void _selecionarUnidade(Map<String, dynamic> unidade) {
@@ -85,24 +126,29 @@ class _ColetaScreenState extends State<ColetaScreen> {
     });
   }
 
-  // 🔹 Snapshot da versão anterior (como antes)
+  // ========= Versionamento brando =========
   Future<void> _snapshotVersaoAnterior(
     String docId,
     Map<String, dynamic> dados,
   ) async {
-    final versaoAtual = (dados['versao'] ?? 1) as int;
-    await _firestore
-        .collection('unidades_produtivas')
-        .doc(docId)
-        .collection('versoes')
-        .add({
-          'versao': versaoAtual,
-          'dados': dados,
-          'salvo_em': DateTime.now().toIso8601String(),
-        });
+    try {
+      final versaoAtual = (dados['versao'] ?? 1) as int;
+      await _firestore
+          .collection('unidades_produtivas')
+          .doc(docId)
+          .collection('versoes')
+          .add({
+            'versao': versaoAtual,
+            'dados': dados,
+            'salvo_em': DateTime.now().toIso8601String(),
+          });
+    } catch (e) {
+      debugPrint('Erro ao salvar snapshot: $e');
+      _showErrorSnack('Não foi possível salvar o histórico da unidade.');
+    }
   }
 
-  // 🔹 Atualização branda de unidades produtivas (mantém versão branda)
+  // ========= Criar/Atualizar UP =========
   Future<void> _verificarOuAtualizarUnidadeProdutiva() async {
     final nome = _pescadorController.text.trim();
     final barco = _embarcacaoController.text.trim();
@@ -110,12 +156,17 @@ class _ColetaScreenState extends State<ColetaScreen> {
     final categoria = _categoriaEmbarcacaoController.text.trim();
     final comunidade = _comunidadeController.text.trim();
 
-    // 🔹 Novo formato de concatenação (agora inclui categoria)
-    final upConcat = "$nome - $barco - $tipo - $categoria - $comunidade";
+    final upConcat = _buildUP(
+      nome: nome,
+      barco: barco,
+      tipo: tipo,
+      categoria: categoria,
+      comunidade: comunidade,
+    );
     final upConcatBusca = upConcat.toLowerCase();
 
     try {
-      // 🔸 Caso seja uma nova unidade produtiva
+      // Nova UP
       if (unidadeProdutivaId == null) {
         final created = await _firestore.collection('unidades_produtivas').add({
           'unidade_produtiva': upConcat,
@@ -137,7 +188,7 @@ class _ColetaScreenState extends State<ColetaScreen> {
         return;
       }
 
-      // 🔸 Caso já exista, verificamos se precisa atualizar ou criar nova
+      // UP existente
       final docRef = _firestore
           .collection('unidades_produtivas')
           .doc(unidadeProdutivaId);
@@ -154,18 +205,15 @@ class _ColetaScreenState extends State<ColetaScreen> {
       bool willUpdate = false;
       bool willCreateNew = false;
 
-      // 🔹 Alterações significativas (cria nova versão)
       final changedCore =
           (atualNome.isNotEmpty && atualNome != nome) ||
           (atualBarco.isNotEmpty && atualBarco != barco) ||
           (atualTipo.isNotEmpty && atualTipo != tipo);
 
-      // 🔹 Mudanças complementares (categoria, comunidade)
       final changedCompl =
           (atualCat.isNotEmpty && atualCat != categoria) ||
           (atualCom.isNotEmpty && atualCom != comunidade);
 
-      // 🔹 Campos antes vazios agora preenchidos (atualização leve)
       final filledEmpty =
           (atualTipo.isEmpty && tipo.isNotEmpty) ||
           (atualCat.isEmpty && categoria.isNotEmpty) ||
@@ -177,7 +225,6 @@ class _ColetaScreenState extends State<ColetaScreen> {
         willUpdate = true;
       }
 
-      // 🔸 Cria nova unidade se houve alteração estrutural
       if (willCreateNew) {
         await _firestore.collection('unidades_produtivas').add({
           'unidade_produtiva': upConcat,
@@ -193,9 +240,7 @@ class _ColetaScreenState extends State<ColetaScreen> {
           'versao': 1,
           'criado_em': DateTime.now().toIso8601String(),
         });
-      }
-      // 🔸 Atualiza a existente se apenas campos vazios foram preenchidos
-      else if (willUpdate) {
+      } else if (willUpdate) {
         await _snapshotVersaoAnterior(doc.id, dados);
         final versaoNova = (dados['versao'] ?? 1) + 1;
         await docRef.update({
@@ -211,50 +256,59 @@ class _ColetaScreenState extends State<ColetaScreen> {
 
       unidadeProdutivaSelecionada = upConcat;
     } catch (e) {
-      debugPrint('Erro ao verificar/atualizar unidade produtiva: $e');
+      debugPrint('Erro ao verificar/atualizar UP: $e');
+      _showErrorSnack('Falha ao atualizar/criar a unidade produtiva.');
     }
   }
 
-  // 🔹 Salvar desembarque
+  // ========= Salvar desembarque =========
   Future<void> _salvarDesembarque() async {
     if (especiesRegistradas.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Adicione ao menos uma espécie.')),
-      );
+      _showErrorSnack('Adicione ao menos uma espécie.');
       return;
     }
 
-    await _verificarOuAtualizarUnidadeProdutiva();
+    setState(() => _salvando = true);
+    try {
+      await _verificarOuAtualizarUnidadeProdutiva();
 
-    final novoDesembarque = {
-      'data': _dataController.text,
-      'hora': _horaController.text,
-      'coletor': widget.coletorEmail,
-      'municipio': widget.municipio,
-      'entreposto': widget.entreposto,
-      'local': _localController.text,
-      'unidade_produtiva': unidadeProdutivaSelecionada,
-      'pescador': _pescadorController.text,
-      'embarcacao': _embarcacaoController.text,
-      'tipo_embarcacao': _tipoEmbarcacaoController.text,
-      'categoria_embarcacao': _categoriaEmbarcacaoController.text,
-      'comunidade': _comunidadeController.text,
-      'origem_producao': origemProducao,
-      'timestamp': DateTime.now().toIso8601String(),
-      'especies': especiesRegistradas,
-    };
+      final novoDesembarque = {
+        'data': _dataController.text, // exibição
+        'hora': _horaController.text, // exibição
+        'coletor': widget.coletorEmail,
+        'municipio': widget.municipio,
+        'entreposto': widget.entreposto,
+        'local': _localController.text,
+        'unidade_produtiva': unidadeProdutivaSelecionada,
+        'pescador': _pescadorController.text,
+        'embarcacao': _embarcacaoController.text,
+        'tipo_embarcacao': _tipoEmbarcacaoController.text,
+        'categoria_embarcacao': _categoriaEmbarcacaoController.text,
+        'comunidade': _comunidadeController.text,
+        'origem_producao': origemProducao,
+        // Técnico para filtros/ordenação:
+        'timestamp': FieldValue.serverTimestamp(),
+        'especies': especiesRegistradas,
+      };
 
-    await _firestore.collection('desembarques').add(novoDesembarque);
+      await _firestore.collection('desembarques').add(novoDesembarque);
 
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('✅ Desembarque salvo com sucesso!')),
-    );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('✅ Desembarque salvo com sucesso!')),
+      );
 
-    await Future.delayed(const Duration(milliseconds: 600));
-    if (context.mounted) Navigator.pushReplacementNamed(context, '/dashboard');
+      await Future.delayed(const Duration(milliseconds: 600));
+      if (mounted) Navigator.pushReplacementNamed(context, '/dashboard');
+    } catch (e) {
+      debugPrint('Erro ao salvar desembarque: $e');
+      _showErrorSnack('Falha ao salvar desembarque. Tente novamente.');
+    } finally {
+      if (mounted) setState(() => _salvando = false);
+    }
   }
 
-  // 🔹 Interface
+  // ========= UI =========
   @override
   Widget build(BuildContext context) {
     const azul = Color(0xFF00294D);
@@ -287,7 +341,12 @@ class _ColetaScreenState extends State<ColetaScreen> {
                   borderSide: BorderSide(color: azul),
                 ),
               ),
-              onChanged: _buscarUnidadesProdutivas,
+              onChanged: (txt) {
+                _debounce?.cancel();
+                _debounce = Timer(const Duration(milliseconds: 300), () {
+                  _buscarUnidadesProdutivas(txt);
+                });
+              },
             ),
             if (sugestoesUnidades.isNotEmpty)
               Container(
@@ -297,18 +356,22 @@ class _ColetaScreenState extends State<ColetaScreen> {
                   borderRadius: BorderRadius.circular(8),
                   color: Colors.white,
                 ),
-                child: Column(
-                  children: sugestoesUnidades
-                      .map(
-                        (u) => ListTile(
-                          title: Text(
-                            u['unidade_produtiva'],
-                            style: TextStyle(color: azul),
-                          ),
-                          onTap: () => _selecionarUnidade(u),
-                        ),
-                      )
-                      .toList(),
+                child: ListView.separated(
+                  shrinkWrap: true,
+                  physics: const NeverScrollableScrollPhysics(),
+                  itemCount: sugestoesUnidades.length,
+                  separatorBuilder: (_, __) =>
+                      const Divider(height: 1, color: Colors.black12),
+                  itemBuilder: (ctx, i) {
+                    final u = sugestoesUnidades[i];
+                    return ListTile(
+                      title: Text(
+                        u['unidade_produtiva'],
+                        style: TextStyle(color: azul),
+                      ),
+                      onTap: () => _selecionarUnidade(u),
+                    );
+                  },
                 ),
               ),
 
@@ -385,6 +448,7 @@ class _ColetaScreenState extends State<ColetaScreen> {
               icon: const Icon(Icons.add),
               label: const Text('Adicionar Espécie'),
             ),
+
             const SizedBox(height: 16),
             DropdownButtonFormField<String>(
               value: origemProducao,
@@ -405,15 +469,28 @@ class _ColetaScreenState extends State<ColetaScreen> {
               ),
               onChanged: (v) => setState(() => origemProducao = v!),
             ),
+
             const SizedBox(height: 24),
             Center(
               child: ElevatedButton(
-                onPressed: _salvarDesembarque,
+                onPressed: _salvando ? null : _salvarDesembarque,
                 style: ElevatedButton.styleFrom(backgroundColor: azul),
-                child: const Text(
-                  'Salvar Desembarque',
-                  style: TextStyle(color: Colors.white),
-                ),
+                child: _salvando
+                    ? const Padding(
+                        padding: EdgeInsets.all(8.0),
+                        child: SizedBox(
+                          width: 22,
+                          height: 22,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: Colors.white,
+                          ),
+                        ),
+                      )
+                    : const Text(
+                        'Salvar Desembarque',
+                        style: TextStyle(color: Colors.white),
+                      ),
               ),
             ),
           ],
@@ -428,12 +505,16 @@ class _ColetaScreenState extends State<ColetaScreen> {
     Color azul, {
     bool readOnly = false,
     VoidCallback? onTap,
+    TextInputType? keyboardType,
+    List<TextInputFormatter>? inputFormatters,
   }) {
     return TextField(
       controller: controller,
       style: TextStyle(color: azul),
       readOnly: readOnly,
       onTap: onTap,
+      keyboardType: keyboardType,
+      inputFormatters: inputFormatters,
       decoration: InputDecoration(
         labelText: label,
         labelStyle: TextStyle(color: azul),
@@ -448,33 +529,45 @@ class _ColetaScreenState extends State<ColetaScreen> {
   // ======================================
   Future<List<String>> _buscarSugestoes(String colecao, String termo) async {
     if (termo.length < 2) return [];
-    final snap = await _firestore.collection(colecao).get();
-    return snap.docs
-        .map((d) => d['nome'].toString())
-        .where((n) => n.toLowerCase().contains(termo.toLowerCase()))
-        .toList();
+    try {
+      final snap = await _firestore.collection(colecao).get();
+      return snap.docs
+          .map((d) => d['nome'].toString())
+          .where((n) => n.toLowerCase().contains(termo.toLowerCase()))
+          .toList();
+    } catch (e) {
+      debugPrint('Erro ao buscar sugestões de $colecao: $e');
+      _showErrorSnack('Falha ao buscar sugestões.');
+      return [];
+    }
   }
 
   /// Garante que o item existe na coleção, criando se não existir.
   Future<void> _garantirRegistroColecao(String colecao, String nome) async {
-    if (nome.trim().isEmpty) return;
-    final query = await _firestore
-        .collection(colecao)
-        .where('nome', isEqualTo: nome.trim())
-        .limit(1)
-        .get();
+    final clean = nome.trim();
+    if (clean.isEmpty) return;
+    try {
+      final query = await _firestore
+          .collection(colecao)
+          .where('nome', isEqualTo: clean)
+          .limit(1)
+          .get();
 
-    if (query.docs.isEmpty) {
-      await _firestore.collection(colecao).add({
-        'nome': nome.trim(),
-        'ativo': true,
-        'criado_em': DateTime.now().toIso8601String(),
-      });
+      if (query.docs.isEmpty) {
+        await _firestore.collection(colecao).add({
+          'nome': clean,
+          'ativo': true,
+          'criado_em': DateTime.now().toIso8601String(),
+        });
+      }
+    } catch (e) {
+      debugPrint('Erro ao garantir registro em $colecao: $e');
+      _showErrorSnack('Falha ao registrar item em $colecao.');
     }
   }
 
   // ======================================
-  // DIALOGO PARA ADICIONAR ESPÉCIE
+  // DIALOGO PARA ADICIONAR/EDITAR ESPÉCIE
   // ======================================
   Future<void> _mostrarDialogoAdicionarEspecie(
     BuildContext context, {
@@ -509,11 +602,11 @@ class _ColetaScreenState extends State<ColetaScreen> {
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setStateDialog) {
           return AlertDialog(
-            title: const Text('Adicionar Espécie'),
+            title: Text(index == null ? 'Adicionar Espécie' : 'Editar Espécie'),
             content: SingleChildScrollView(
               child: Column(
                 children: [
-                  // Campo de Espécie
+                  // Espécie
                   TextField(
                     controller: especieCtrl,
                     style: const TextStyle(color: azul),
@@ -533,26 +626,35 @@ class _ColetaScreenState extends State<ColetaScreen> {
                         border: Border.all(color: azul),
                         borderRadius: BorderRadius.circular(8),
                       ),
-                      child: Column(
-                        children: sugestoesEspecie
-                            .map(
-                              (s) => ListTile(
-                                title: Text(s),
-                                onTap: () {
-                                  especieCtrl.text = s;
-                                  setStateDialog(
-                                    () => sugestoesEspecie.clear(),
-                                  );
-                                },
-                              ),
-                            )
-                            .toList(),
+                      child: ListView.separated(
+                        shrinkWrap: true,
+                        physics: const NeverScrollableScrollPhysics(),
+                        itemCount: sugestoesEspecie.length,
+                        separatorBuilder: (_, __) =>
+                            const Divider(height: 1, color: Colors.black12),
+                        itemBuilder: (_, i) => ListTile(
+                          title: Text(sugestoesEspecie[i]),
+                          onTap: () {
+                            especieCtrl.text = sugestoesEspecie[i];
+                            setStateDialog(() => sugestoesEspecie.clear());
+                          },
+                        ),
                       ),
                     ),
                   const SizedBox(height: 8),
 
                   // Quantidade
-                  _buildTextField('Quantidade', qtdCtrl, azul),
+                  _buildTextField(
+                    'Quantidade',
+                    qtdCtrl,
+                    azul,
+                    keyboardType: const TextInputType.numberWithOptions(
+                      decimal: true,
+                    ),
+                    inputFormatters: [
+                      FilteringTextInputFormatter.allow(RegExp(r'[0-9.,]')),
+                    ],
+                  ),
                   const SizedBox(height: 8),
 
                   // Unidade
@@ -561,7 +663,7 @@ class _ColetaScreenState extends State<ColetaScreen> {
                     items: ['Kg', 'Dúzia', 'Caixa']
                         .map((u) => DropdownMenuItem(value: u, child: Text(u)))
                         .toList(),
-                    onChanged: (v) => unidade = v!,
+                    onChanged: (v) => setStateDialog(() => unidade = v!),
                     decoration: const InputDecoration(
                       labelText: 'Unidade de medida',
                       border: OutlineInputBorder(),
@@ -570,7 +672,17 @@ class _ColetaScreenState extends State<ColetaScreen> {
                   const SizedBox(height: 8),
 
                   // Preço
-                  _buildTextField('Preço por unidade (R\$)', precoCtrl, azul),
+                  _buildTextField(
+                    'Preço por unidade (R\$)',
+                    precoCtrl,
+                    azul,
+                    keyboardType: const TextInputType.numberWithOptions(
+                      decimal: true,
+                    ),
+                    inputFormatters: [
+                      FilteringTextInputFormatter.allow(RegExp(r'[0-9.,]')),
+                    ],
+                  ),
                   const SizedBox(height: 8),
 
                   // Beneficiamento
@@ -579,7 +691,7 @@ class _ColetaScreenState extends State<ColetaScreen> {
                     items: ['Bruto', 'Limpo']
                         .map((b) => DropdownMenuItem(value: b, child: Text(b)))
                         .toList(),
-                    onChanged: (v) => beneficiamento = v!,
+                    onChanged: (v) => setStateDialog(() => beneficiamento = v!),
                     decoration: const InputDecoration(
                       labelText: 'Beneficiamento',
                       border: OutlineInputBorder(),
@@ -607,18 +719,19 @@ class _ColetaScreenState extends State<ColetaScreen> {
                         border: Border.all(color: azul),
                         borderRadius: BorderRadius.circular(8),
                       ),
-                      child: Column(
-                        children: sugestoesArte
-                            .map(
-                              (s) => ListTile(
-                                title: Text(s),
-                                onTap: () {
-                                  arteCtrl.text = s;
-                                  setStateDialog(() => sugestoesArte.clear());
-                                },
-                              ),
-                            )
-                            .toList(),
+                      child: ListView.separated(
+                        shrinkWrap: true,
+                        physics: const NeverScrollableScrollPhysics(),
+                        itemCount: sugestoesArte.length,
+                        separatorBuilder: (_, __) =>
+                            const Divider(height: 1, color: Colors.black12),
+                        itemBuilder: (_, i) => ListTile(
+                          title: Text(sugestoesArte[i]),
+                          onTap: () {
+                            arteCtrl.text = sugestoesArte[i];
+                            setStateDialog(() => sugestoesArte.clear());
+                          },
+                        ),
                       ),
                     ),
                   const SizedBox(height: 8),
@@ -643,20 +756,19 @@ class _ColetaScreenState extends State<ColetaScreen> {
                         border: Border.all(color: azul),
                         borderRadius: BorderRadius.circular(8),
                       ),
-                      child: Column(
-                        children: sugestoesPesqueiro
-                            .map(
-                              (s) => ListTile(
-                                title: Text(s),
-                                onTap: () {
-                                  pesqueiroCtrl.text = s;
-                                  setStateDialog(
-                                    () => sugestoesPesqueiro.clear(),
-                                  );
-                                },
-                              ),
-                            )
-                            .toList(),
+                      child: ListView.separated(
+                        shrinkWrap: true,
+                        physics: const NeverScrollableScrollPhysics(),
+                        itemCount: sugestoesPesqueiro.length,
+                        separatorBuilder: (_, __) =>
+                            const Divider(height: 1, color: Colors.black12),
+                        itemBuilder: (_, i) => ListTile(
+                          title: Text(sugestoesPesqueiro[i]),
+                          onTap: () {
+                            pesqueiroCtrl.text = sugestoesPesqueiro[i];
+                            setStateDialog(() => sugestoesPesqueiro.clear());
+                          },
+                        ),
                       ),
                     ),
                 ],
@@ -679,9 +791,9 @@ class _ColetaScreenState extends State<ColetaScreen> {
 
                   final especieData = {
                     'especie': especieCtrl.text.trim(),
-                    'quantidade': double.tryParse(qtdCtrl.text) ?? 0,
+                    'quantidade': _toDouble(qtdCtrl.text),
                     'unidade': unidade,
-                    'preco_unidade': double.tryParse(precoCtrl.text) ?? 0,
+                    'preco_unidade': _toDouble(precoCtrl.text),
                     'arte_pesca': arteCtrl.text.trim(),
                     'pesqueiro': pesqueiroCtrl.text.trim(),
                     'beneficiamento': beneficiamento,
@@ -707,5 +819,20 @@ class _ColetaScreenState extends State<ColetaScreen> {
         },
       ),
     );
+  }
+
+  @override
+  void dispose() {
+    _dataController.dispose();
+    _horaController.dispose();
+    _localController.dispose();
+    _buscaUnidadeController.dispose();
+    _pescadorController.dispose();
+    _embarcacaoController.dispose();
+    _tipoEmbarcacaoController.dispose();
+    _categoriaEmbarcacaoController.dispose();
+    _comunidadeController.dispose();
+    _debounce?.cancel();
+    super.dispose();
   }
 }
