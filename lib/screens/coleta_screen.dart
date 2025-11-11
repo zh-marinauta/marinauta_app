@@ -109,91 +109,110 @@ class _ColetaScreenState extends State<ColetaScreen> {
     final tipo = _tipoEmbarcacaoController.text.trim();
     final categoria = _categoriaEmbarcacaoController.text.trim();
     final comunidade = _comunidadeController.text.trim();
-    final upConcat = "$nome - $barco - $comunidade - $tipo - $categoria";
 
-    if (unidadeProdutivaId == null) {
-      final created = await _firestore.collection('unidades_produtivas').add({
-        'unidade_produtiva': upConcat,
-        'pescador': nome,
-        'embarcacao': barco,
-        'tipo_embarcacao': tipo,
-        'categoria_embarcacao': categoria,
-        'comunidade': comunidade,
-        'municipio': widget.municipio,
-        'entrepostos': [widget.entreposto],
-        'ativo': true,
-        'versao': 1,
-        'criado_em': DateTime.now().toIso8601String(),
-      });
-      unidadeProdutivaId = created.id;
+    // 🔹 Novo formato de concatenação (agora inclui categoria)
+    final upConcat = "$nome - $barco - $tipo - $categoria - $comunidade";
+    final upConcatBusca = upConcat.toLowerCase();
+
+    try {
+      // 🔸 Caso seja uma nova unidade produtiva
+      if (unidadeProdutivaId == null) {
+        final created = await _firestore.collection('unidades_produtivas').add({
+          'unidade_produtiva': upConcat,
+          'unidade_produtiva_busca': upConcatBusca,
+          'pescador': nome,
+          'embarcacao': barco,
+          'tipo_embarcacao': tipo,
+          'categoria_embarcacao': categoria,
+          'comunidade': comunidade,
+          'municipio': widget.municipio,
+          'entrepostos': [widget.entreposto],
+          'ativo': true,
+          'versao': 1,
+          'criado_em': DateTime.now().toIso8601String(),
+        });
+
+        unidadeProdutivaId = created.id;
+        unidadeProdutivaSelecionada = upConcat;
+        return;
+      }
+
+      // 🔸 Caso já exista, verificamos se precisa atualizar ou criar nova
+      final docRef = _firestore
+          .collection('unidades_produtivas')
+          .doc(unidadeProdutivaId);
+      final doc = await docRef.get();
+      if (!doc.exists) return;
+
+      final dados = doc.data()!;
+      final atualNome = (dados['pescador'] ?? '').toString();
+      final atualBarco = (dados['embarcacao'] ?? '').toString();
+      final atualTipo = (dados['tipo_embarcacao'] ?? '').toString();
+      final atualCat = (dados['categoria_embarcacao'] ?? '').toString();
+      final atualCom = (dados['comunidade'] ?? '').toString();
+
+      bool willUpdate = false;
+      bool willCreateNew = false;
+
+      // 🔹 Alterações significativas (cria nova versão)
+      final changedCore =
+          (atualNome.isNotEmpty && atualNome != nome) ||
+          (atualBarco.isNotEmpty && atualBarco != barco) ||
+          (atualTipo.isNotEmpty && atualTipo != tipo);
+
+      // 🔹 Mudanças complementares (categoria, comunidade)
+      final changedCompl =
+          (atualCat.isNotEmpty && atualCat != categoria) ||
+          (atualCom.isNotEmpty && atualCom != comunidade);
+
+      // 🔹 Campos antes vazios agora preenchidos (atualização leve)
+      final filledEmpty =
+          (atualTipo.isEmpty && tipo.isNotEmpty) ||
+          (atualCat.isEmpty && categoria.isNotEmpty) ||
+          (atualCom.isEmpty && comunidade.isNotEmpty);
+
+      if (changedCore || changedCompl) {
+        willCreateNew = true;
+      } else if (filledEmpty) {
+        willUpdate = true;
+      }
+
+      // 🔸 Cria nova unidade se houve alteração estrutural
+      if (willCreateNew) {
+        await _firestore.collection('unidades_produtivas').add({
+          'unidade_produtiva': upConcat,
+          'unidade_produtiva_busca': upConcatBusca,
+          'pescador': nome,
+          'embarcacao': barco,
+          'tipo_embarcacao': tipo,
+          'categoria_embarcacao': categoria,
+          'comunidade': comunidade,
+          'municipio': widget.municipio,
+          'entrepostos': [widget.entreposto],
+          'ativo': true,
+          'versao': 1,
+          'criado_em': DateTime.now().toIso8601String(),
+        });
+      }
+      // 🔸 Atualiza a existente se apenas campos vazios foram preenchidos
+      else if (willUpdate) {
+        await _snapshotVersaoAnterior(doc.id, dados);
+        final versaoNova = (dados['versao'] ?? 1) + 1;
+        await docRef.update({
+          'tipo_embarcacao': atualTipo.isEmpty ? tipo : atualTipo,
+          'categoria_embarcacao': atualCat.isEmpty ? categoria : atualCat,
+          'comunidade': atualCom.isEmpty ? comunidade : atualCom,
+          'unidade_produtiva': upConcat,
+          'unidade_produtiva_busca': upConcatBusca,
+          'versao': versaoNova,
+          'atualizado_em': DateTime.now().toIso8601String(),
+        });
+      }
+
       unidadeProdutivaSelecionada = upConcat;
-      return;
+    } catch (e) {
+      debugPrint('Erro ao verificar/atualizar unidade produtiva: $e');
     }
-
-    final docRef = _firestore
-        .collection('unidades_produtivas')
-        .doc(unidadeProdutivaId);
-    final doc = await docRef.get();
-    if (!doc.exists) return;
-
-    final dados = doc.data()!;
-    final atualNome = (dados['pescador'] ?? '').toString();
-    final atualBarco = (dados['embarcacao'] ?? '').toString();
-    final atualTipo = (dados['tipo_embarcacao'] ?? '').toString();
-    final atualCat = (dados['categoria_embarcacao'] ?? '').toString();
-    final atualCom = (dados['comunidade'] ?? '').toString();
-
-    bool willUpdate = false;
-    bool willCreateNew = false;
-
-    final changedCore =
-        (atualNome.isNotEmpty && atualNome != nome) ||
-        (atualBarco.isNotEmpty && atualBarco != barco) ||
-        (atualTipo.isNotEmpty && atualTipo != tipo);
-
-    final changedCompl =
-        (atualCat.isNotEmpty && atualCat != categoria) ||
-        (atualCom.isNotEmpty && atualCom != comunidade);
-
-    final filledEmpty =
-        (atualTipo.isEmpty && tipo.isNotEmpty) ||
-        (atualCat.isEmpty && categoria.isNotEmpty) ||
-        (atualCom.isEmpty && comunidade.isNotEmpty);
-
-    if (changedCore || changedCompl) {
-      willCreateNew = true;
-    } else if (filledEmpty) {
-      willUpdate = true;
-    }
-
-    if (willCreateNew) {
-      await _firestore.collection('unidades_produtivas').add({
-        'unidade_produtiva': upConcat,
-        'pescador': nome,
-        'embarcacao': barco,
-        'tipo_embarcacao': tipo,
-        'categoria_embarcacao': categoria,
-        'comunidade': comunidade,
-        'municipio': widget.municipio,
-        'entrepostos': [widget.entreposto],
-        'ativo': true,
-        'versao': 1,
-        'criado_em': DateTime.now().toIso8601String(),
-      });
-    } else if (willUpdate) {
-      await _snapshotVersaoAnterior(doc.id, dados);
-      final versaoNova = (dados['versao'] ?? 1) + 1;
-      await docRef.update({
-        'tipo_embarcacao': atualTipo.isEmpty ? tipo : atualTipo,
-        'categoria_embarcacao': atualCat.isEmpty ? categoria : atualCat,
-        'comunidade': atualCom.isEmpty ? comunidade : atualCom,
-        'unidade_produtiva': upConcat,
-        'versao': versaoNova,
-        'atualizado_em': DateTime.now().toIso8601String(),
-      });
-    }
-
-    unidadeProdutivaSelecionada = upConcat;
   }
 
   // 🔹 Salvar desembarque
