@@ -320,22 +320,41 @@ class _ColetaScreenState extends State<ColetaScreen> {
 
             const Divider(height: 24, color: Colors.black26),
 
+            // Lista de espécies registradas
             ...especiesRegistradas.asMap().entries.map((entry) {
               final i = entry.key;
               final e = entry.value;
               return Card(
+                elevation: 2,
+                margin: const EdgeInsets.symmetric(vertical: 4),
                 child: ListTile(
                   title: Text(
                     '${e['especie']} - ${e['quantidade']} ${e['unidade']}',
-                    style: TextStyle(color: azul),
+                    style: TextStyle(color: azul, fontWeight: FontWeight.w500),
                   ),
                   subtitle: Text(
-                    'Pesqueiro: ${e['pesqueiro']} | R\$${e['preco_unidade']}/un',
+                    'Pesqueiro: ${e['pesqueiro']} | ${e['beneficiamento'] ?? 'Bruto'} | R\$${e['preco_unidade']}/un',
+                    style: const TextStyle(fontSize: 13),
                   ),
-                  trailing: IconButton(
-                    icon: const Icon(Icons.delete, color: Colors.red),
-                    onPressed: () =>
-                        setState(() => especiesRegistradas.removeAt(i)),
+                  trailing: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      IconButton(
+                        icon: const Icon(Icons.edit, color: Colors.blueAccent),
+                        tooltip: 'Editar espécie',
+                        onPressed: () => _mostrarDialogoAdicionarEspecie(
+                          context,
+                          especieExistente: e,
+                          index: i,
+                        ),
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.delete, color: Colors.red),
+                        tooltip: 'Remover espécie',
+                        onPressed: () =>
+                            setState(() => especiesRegistradas.removeAt(i)),
+                      ),
+                    ],
                   ),
                 ),
               );
@@ -438,14 +457,29 @@ class _ColetaScreenState extends State<ColetaScreen> {
   // ======================================
   // DIALOGO PARA ADICIONAR ESPÉCIE
   // ======================================
-  Future<void> _mostrarDialogoAdicionarEspecie(BuildContext context) async {
+  Future<void> _mostrarDialogoAdicionarEspecie(
+    BuildContext context, {
+    Map<String, dynamic>? especieExistente,
+    int? index,
+  }) async {
     const azul = Color(0xFF00294D);
-    final especieCtrl = TextEditingController();
-    final qtdCtrl = TextEditingController();
-    final precoCtrl = TextEditingController();
-    final arteCtrl = TextEditingController();
-    final pesqueiroCtrl = TextEditingController();
-    String unidade = 'Kg';
+    final especieCtrl = TextEditingController(
+      text: especieExistente?['especie'] ?? '',
+    );
+    final qtdCtrl = TextEditingController(
+      text: especieExistente?['quantidade']?.toString() ?? '',
+    );
+    final precoCtrl = TextEditingController(
+      text: especieExistente?['preco_unidade']?.toString() ?? '',
+    );
+    final arteCtrl = TextEditingController(
+      text: especieExistente?['arte_pesca'] ?? '',
+    );
+    final pesqueiroCtrl = TextEditingController(
+      text: especieExistente?['pesqueiro'] ?? '',
+    );
+    String unidade = especieExistente?['unidade'] ?? 'Kg';
+    String beneficiamento = especieExistente?['beneficiamento'] ?? 'Bruto';
 
     List<String> sugestoesEspecie = [];
     List<String> sugestoesArte = [];
@@ -460,7 +494,7 @@ class _ColetaScreenState extends State<ColetaScreen> {
             content: SingleChildScrollView(
               child: Column(
                 children: [
-                  // Campo de Espécie com autocomplete
+                  // Campo de Espécie
                   TextField(
                     controller: especieCtrl,
                     style: const TextStyle(color: azul),
@@ -475,6 +509,7 @@ class _ColetaScreenState extends State<ColetaScreen> {
                   ),
                   if (sugestoesEspecie.isNotEmpty)
                     Container(
+                      margin: const EdgeInsets.only(top: 4),
                       decoration: BoxDecoration(
                         border: Border.all(color: azul),
                         borderRadius: BorderRadius.circular(8),
@@ -510,6 +545,7 @@ class _ColetaScreenState extends State<ColetaScreen> {
                     onChanged: (v) => unidade = v!,
                     decoration: const InputDecoration(
                       labelText: 'Unidade de medida',
+                      border: OutlineInputBorder(),
                     ),
                   ),
                   const SizedBox(height: 8),
@@ -518,7 +554,21 @@ class _ColetaScreenState extends State<ColetaScreen> {
                   _buildTextField('Preço por unidade (R\$)', precoCtrl, azul),
                   const SizedBox(height: 8),
 
-                  // Arte de pesca com autocomplete
+                  // Beneficiamento
+                  DropdownButtonFormField<String>(
+                    value: beneficiamento,
+                    items: ['Bruto', 'Limpo']
+                        .map((b) => DropdownMenuItem(value: b, child: Text(b)))
+                        .toList(),
+                    onChanged: (v) => beneficiamento = v!,
+                    decoration: const InputDecoration(
+                      labelText: 'Beneficiamento',
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+
+                  // Arte de pesca
                   TextField(
                     controller: arteCtrl,
                     style: const TextStyle(color: azul),
@@ -533,6 +583,7 @@ class _ColetaScreenState extends State<ColetaScreen> {
                   ),
                   if (sugestoesArte.isNotEmpty)
                     Container(
+                      margin: const EdgeInsets.only(top: 4),
                       decoration: BoxDecoration(
                         border: Border.all(color: azul),
                         borderRadius: BorderRadius.circular(8),
@@ -553,7 +604,7 @@ class _ColetaScreenState extends State<ColetaScreen> {
                     ),
                   const SizedBox(height: 8),
 
-                  // Pesqueiro com autocomplete
+                  // Pesqueiro
                   TextField(
                     controller: pesqueiroCtrl,
                     style: const TextStyle(color: azul),
@@ -568,6 +619,7 @@ class _ColetaScreenState extends State<ColetaScreen> {
                   ),
                   if (sugestoesPesqueiro.isNotEmpty)
                     Container(
+                      margin: const EdgeInsets.only(top: 4),
                       decoration: BoxDecoration(
                         border: Border.all(color: azul),
                         borderRadius: BorderRadius.circular(8),
@@ -599,7 +651,6 @@ class _ColetaScreenState extends State<ColetaScreen> {
               ElevatedButton(
                 style: ElevatedButton.styleFrom(backgroundColor: azul),
                 onPressed: () async {
-                  // 🔹 Autoalimentar coleções
                   await _garantirRegistroColecao('especies', especieCtrl.text);
                   await _garantirRegistroColecao('artes_pesca', arteCtrl.text);
                   await _garantirRegistroColecao(
@@ -607,21 +658,28 @@ class _ColetaScreenState extends State<ColetaScreen> {
                     pesqueiroCtrl.text,
                   );
 
-                  // 🔹 Adicionar à lista local
+                  final especieData = {
+                    'especie': especieCtrl.text.trim(),
+                    'quantidade': double.tryParse(qtdCtrl.text) ?? 0,
+                    'unidade': unidade,
+                    'preco_unidade': double.tryParse(precoCtrl.text) ?? 0,
+                    'arte_pesca': arteCtrl.text.trim(),
+                    'pesqueiro': pesqueiroCtrl.text.trim(),
+                    'beneficiamento': beneficiamento,
+                  };
+
                   setState(() {
-                    especiesRegistradas.add({
-                      'especie': especieCtrl.text.trim(),
-                      'quantidade': double.tryParse(qtdCtrl.text) ?? 0,
-                      'unidade': unidade,
-                      'preco_unidade': double.tryParse(precoCtrl.text) ?? 0,
-                      'arte_pesca': arteCtrl.text.trim(),
-                      'pesqueiro': pesqueiroCtrl.text.trim(),
-                    });
+                    if (index != null) {
+                      especiesRegistradas[index] = especieData;
+                    } else {
+                      especiesRegistradas.add(especieData);
+                    }
                   });
+
                   Navigator.pop(ctx);
                 },
                 child: const Text(
-                  'Adicionar',
+                  'Salvar',
                   style: TextStyle(color: Colors.white),
                 ),
               ),
